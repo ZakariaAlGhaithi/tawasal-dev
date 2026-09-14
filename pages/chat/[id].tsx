@@ -1,12 +1,16 @@
 import { useState, useEffect, useRef } from 'react'
 import { useRouter } from 'next/router'
 import { supabase } from '../../lib/supabaseClient'
+import MessageBubble from '../../components/MessageBubble'
+import Composer from '../../components/Composer'
 
 export default function ChatPage(){
   const router = useRouter()
   const { id } = router.query
   const [messages, setMessages] = useState<any[]>([])
-  const [text, setText] = useState('')
+  const [editingId, setEditingId] = useState<string | null>(null)
+  const [replyTo, setReplyTo] = useState<any|null>(null)
+  const [selected, setSelected] = useState<Record<string,boolean>>({})
   const messagesRef = useRef<HTMLDivElement|null>(null)
 
   useEffect(()=>{
@@ -33,19 +37,43 @@ export default function ChatPage(){
 
   useEffect(()=>{ scrollToBottom() }, [messages])
 
-  async function sendMessage(e:any){
-    e.preventDefault()
+  async function handleSend(text:string){
     if(!text.trim() || !id) return
-    // Client-side simple POST to API
-    const res = await fetch(`/api/conversations/${id}/messages`, { method: 'POST', headers: { 'Content-Type':'application/json' }, body: JSON.stringify({ sender_id: 'dev-profile', content: text }) })
+    const payload = { sender_id: 'dev-profile', content: text }
+    const res = await fetch(`/api/conversations/${id}/messages`, { method: 'POST', headers: { 'Content-Type':'application/json' }, body: JSON.stringify(payload) })
     const data = await res.json()
     if(res.ok){
-      setText('')
-      // optimistic update if response contains message
       if(data.message) setMessages(prev=>[...prev, data.message])
     } else {
       alert(data.message || 'Failed to send')
     }
+  }
+
+  async function handleEdit(id:string, newText:string){
+    const res = await fetch(`/api/messages/${id}`, { method: 'PATCH', headers: {'Content-Type':'application/json'}, body: JSON.stringify({ content: newText }) })
+    const data = await res.json()
+    if(res.ok){
+      setMessages(prev=>prev.map(m=> m.id === id ? data.message : m))
+      setEditingId(null)
+    } else alert(data.message || 'Edit failed')
+  }
+
+  async function handleDelete(id:string){
+    if(!confirm('Delete this message?')) return
+    const res = await fetch(`/api/messages/${id}`, { method: 'DELETE' })
+    const data = await res.json()
+    if(res.ok){
+      setMessages(prev=>prev.filter(m=> m.id !== id))
+    } else alert(data.message || 'Delete failed')
+  }
+
+  function toggleSelect(mid:string){
+    setSelected(prev => ({ ...prev, [mid]: !prev[mid] }))
+  }
+
+  function onReply(mid:string){
+    const m = messages.find(x=>x.id===mid)
+    setReplyTo(m)
   }
 
   return (
@@ -56,18 +84,38 @@ export default function ChatPage(){
       <main className="flex-1 overflow-auto p-4 bg-gray-50 dark:bg-gray-900">
         <div className="space-y-3">
           {messages.map(m=> (
-            <div key={m.id} className="p-2 bg-white dark:bg-gray-800 rounded shadow-sm max-w-xl">
-              <div className="text-xs text-gray-500">{m.sender_id} • {new Date(m.created_at).toLocaleString()}</div>
-              <div className="mt-1">{m.content}</div>
+            <div key={m.id} className="flex items-start gap-2">
+              <input type="checkbox" checked={!!selected[m.id]} onChange={()=>toggleSelect(m.id)} />
+              <div className="flex-1">
+                <MessageBubble message={m} isOwn={m.sender_id==='dev-profile'} onEdit={(id)=>setEditingId(id)} onDelete={(id)=>handleDelete(id)} onReply={(id)=>onReply(id)} />
+                {editingId === m.id && (
+                  <EditInline id={m.id} current={m.content} onSave={handleEdit} onCancel={()=>setEditingId(null)} />
+                )}
+              </div>
             </div>
           ))}
           <div ref={messagesRef} />
         </div>
       </main>
-      <form onSubmit={sendMessage} className="p-4 border-t bg-white dark:bg-gray-800 flex">
-        <input value={text} onChange={e=>setText(e.target.value)} className="flex-1 px-3 py-2 border rounded" placeholder="Type a message" />
-        <button className="ml-2 px-4 py-2 bg-green-600 text-white rounded">Send</button>
-      </form>
+      <div className="p-4 border-t bg-white dark:bg-gray-800">
+        {replyTo && (
+          <div className="mb-2 p-2 bg-gray-100 dark:bg-gray-700 rounded">Replying to: <strong>{replyTo.content}</strong> <button onClick={()=>setReplyTo(null)} className="ml-2 underline">Cancel</button></div>
+        )}
+        <Composer onSend={handleSend} />
+      </div>
+    </div>
+  )
+}
+
+function EditInline({ id, current, onSave, onCancel }:{ id:string, current:string, onSave:(id:string, text:string)=>Promise<void>, onCancel:()=>void }){
+  const [value, setValue] = useState(current)
+  return (
+    <div className="p-2 mt-2 bg-gray-50 rounded">
+      <textarea value={value} onChange={e=>setValue(e.target.value)} className="w-full p-2 border rounded" />
+      <div className="mt-2 flex gap-2">
+        <button onClick={()=>onSave(id, value)} className="px-3 py-1 bg-green-600 text-white rounded">Save</button>
+        <button onClick={onCancel} className="px-3 py-1 bg-gray-300 rounded">Cancel</button>
+      </div>
     </div>
   )
 }
